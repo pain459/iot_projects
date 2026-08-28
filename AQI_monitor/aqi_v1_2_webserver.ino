@@ -1,6 +1,7 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <WebServer.h>
+#include <ESPmDNS.h>
 #include <time.h>
 
 #include <Adafruit_GFX.h>
@@ -14,6 +15,15 @@
 const char* WIFI_SSID     = "Pirates_IoT";
 const char* WIFI_PASSWORD = "<password>";
 
+// ============================================================
+// mDNS
+// ============================================================
+
+const char* MDNS_HOSTNAME = "airmonitor";
+
+// Access using:
+// http://airmonitor.local
+//
 // ============================================================
 // NTP / Time Configuration
 // ============================================================
@@ -54,7 +64,6 @@ Adafruit_SSD1306 display(
 
 SensirionI2cSps30 sps30;
 
-// SPS30 firmware
 uint8_t fwMajor = 0;
 uint8_t fwMinor = 0;
 
@@ -92,7 +101,7 @@ float nc10p0 = 0.0;
 float typicalSize = 0.0;
 
 // ============================================================
-// Sensor state
+// Sensor State
 // ============================================================
 
 bool sps30Online = false;
@@ -130,10 +139,6 @@ void printSystemStatus();
 
 void setup() {
 
-  // ----------------------------------------------------------
-  // Serial
-  // ----------------------------------------------------------
-
   Serial.begin(115200);
 
   delay(2000);
@@ -141,7 +146,7 @@ void setup() {
   Serial.println();
   Serial.println("========================================");
   Serial.println("      ESP32-S3 AIR QUALITY MONITOR");
-  Serial.println("                 V1.2");
+  Serial.println("                 V1.2.1");
   Serial.println("========================================");
   Serial.println();
 
@@ -176,8 +181,6 @@ void setup() {
 
   Serial.println("OLED initialized.");
 
-  // Boot screen
-
   display.clearDisplay();
 
   display.setTextSize(1);
@@ -187,7 +190,7 @@ void setup() {
   display.println("AIR QUALITY MONITOR");
 
   display.setCursor(0, 20);
-  display.println("V1.2");
+  display.println("V1.2.1");
 
   display.setCursor(0, 35);
   display.println("Initializing...");
@@ -199,6 +202,43 @@ void setup() {
   // ----------------------------------------------------------
 
   connectWiFi();
+
+  // ----------------------------------------------------------
+  // mDNS
+  // ----------------------------------------------------------
+
+  if (WiFi.status() == WL_CONNECTED) {
+
+    if (MDNS.begin(MDNS_HOSTNAME)) {
+
+      Serial.println();
+      Serial.println("mDNS started.");
+
+      Serial.print(
+        "Hostname: http://"
+      );
+
+      Serial.print(
+        MDNS_HOSTNAME
+      );
+
+      Serial.println(
+        ".local"
+      );
+
+      MDNS.addService(
+        "http",
+        "tcp",
+        80
+      );
+
+    } else {
+
+      Serial.println(
+        "WARNING: mDNS failed to start."
+      );
+    }
+  }
 
   // ----------------------------------------------------------
   // NTP
@@ -224,10 +264,11 @@ void setup() {
   // Probe SPS30
   // ----------------------------------------------------------
 
-  int16_t error = sps30.readFirmwareVersion(
-    fwMajor,
-    fwMinor
-  );
+  int16_t error =
+    sps30.readFirmwareVersion(
+      fwMajor,
+      fwMinor
+    );
 
   if (error) {
 
@@ -270,9 +311,10 @@ void setup() {
   // Start measurement
   // ----------------------------------------------------------
 
-  error = sps30.startMeasurement(
-    SPS30_OUTPUT_FORMAT_OUTPUT_FORMAT_FLOAT
-  );
+  error =
+    sps30.startMeasurement(
+      SPS30_OUTPUT_FORMAT_OUTPUT_FORMAT_FLOAT
+    );
 
   if (error) {
 
@@ -302,7 +344,6 @@ void setup() {
     "SPS30 measurement started."
   );
 
-  // Allow sensor fan to stabilize
   delay(1000);
 
   // ----------------------------------------------------------
@@ -321,17 +362,25 @@ void setup() {
 
   updateDisplay();
 
-  // ----------------------------------------------------------
-  // System status
-  // ----------------------------------------------------------
-
   printSystemStatus();
 
   Serial.println();
   Serial.println("========================================");
-  Serial.println("V1.2 MONITOR STARTED");
+  Serial.println("V1.2.1 MONITOR STARTED");
   Serial.println("========================================");
   Serial.println();
+
+  Serial.print(
+    "Open dashboard: http://"
+  );
+
+  Serial.print(
+    MDNS_HOSTNAME
+  );
+
+  Serial.println(
+    ".local"
+  );
 }
 
 // ============================================================
@@ -340,21 +389,9 @@ void setup() {
 
 void loop() {
 
-  // ----------------------------------------------------------
-  // SPS30
-  // ----------------------------------------------------------
-
   updateSPS30();
 
-  // ----------------------------------------------------------
-  // Web server
-  // ----------------------------------------------------------
-
   server.handleClient();
-
-  // ----------------------------------------------------------
-  // OLED screen rotation
-  // ----------------------------------------------------------
 
   if (
     millis() - lastScreenChange >=
@@ -382,8 +419,13 @@ void loop() {
 void connectWiFi() {
 
   Serial.println();
-  Serial.print("Connecting to Wi-Fi: ");
-  Serial.println(WIFI_SSID);
+  Serial.print(
+    "Connecting to Wi-Fi: "
+  );
+
+  Serial.println(
+    WIFI_SSID
+  );
 
   WiFi.mode(WIFI_STA);
 
@@ -522,10 +564,6 @@ void updateSPS30() {
     return;
   }
 
-  // ----------------------------------------------------------
-  // Read floating-point values
-  // ----------------------------------------------------------
-
   error =
     sps30.readMeasurementValuesFloat(
       pm1p0,
@@ -552,10 +590,6 @@ void updateSPS30() {
   }
 
   lastMeasurementMillis = millis();
-
-  // ----------------------------------------------------------
-  // Serial
-  // ----------------------------------------------------------
 
   Serial.println(
     "----------------------------------------"
@@ -596,7 +630,6 @@ void updateSPS30() {
   Serial.print(typicalSize, 2);
   Serial.println(" um");
 
-  // Refresh OLED
   updateDisplay();
 }
 
@@ -627,16 +660,6 @@ void startWebServer() {
   Serial.println(
     "Web server started."
   );
-
-  Serial.print(
-    "Dashboard: http://"
-  );
-
-  Serial.print(
-    WiFi.localIP()
-  );
-
-  Serial.println("/");
 }
 
 // ============================================================
@@ -667,6 +690,28 @@ void handleRoot() {
   box-sizing: border-box;
 }
 
+:root {
+
+  --bg: #f2f4f7;
+  --card: #ffffff;
+  --text: #202124;
+  --secondary: #666666;
+  --border: #eeeeee;
+  --accent: #137333;
+  --status-bg: #e6f4ea;
+}
+
+[data-theme="dark"] {
+
+  --bg: #101214;
+  --card: #1b1e22;
+  --text: #f1f3f4;
+  --secondary: #aeb4bb;
+  --border: #30343a;
+  --accent: #81c995;
+  --status-bg: #183522;
+}
+
 body {
 
   margin: 0;
@@ -678,9 +723,13 @@ body {
     "Segoe UI",
     sans-serif;
 
-  background: #f2f4f7;
+  background: var(--bg);
 
-  color: #202124;
+  color: var(--text);
+
+  transition:
+    background 0.2s,
+    color 0.2s;
 }
 
 .container {
@@ -694,7 +743,7 @@ body {
 
 .header {
 
-  background: white;
+  background: var(--card);
 
   border-radius: 16px;
 
@@ -703,7 +752,9 @@ body {
   margin-bottom: 16px;
 
   box-shadow:
-    0 2px 8px rgba(0,0,0,0.08);
+    0 2px 8px rgba(0,0,0,0.12);
+
+  position: relative;
 }
 
 .header h1 {
@@ -717,12 +768,37 @@ body {
 
   margin: 6px 0 0;
 
-  color: #666;
+  color: var(--secondary);
+}
+
+.theme-button {
+
+  position: absolute;
+
+  top: 16px;
+
+  right: 16px;
+
+  border: none;
+
+  border-radius: 50%;
+
+  width: 40px;
+
+  height: 40px;
+
+  cursor: pointer;
+
+  background: var(--bg);
+
+  color: var(--text);
+
+  font-size: 20px;
 }
 
 .main-card {
 
-  background: white;
+  background: var(--card);
 
   border-radius: 16px;
 
@@ -733,14 +809,14 @@ body {
   margin-bottom: 16px;
 
   box-shadow:
-    0 2px 8px rgba(0,0,0,0.08);
+    0 2px 8px rgba(0,0,0,0.12);
 }
 
 .main-label {
 
   font-size: 16px;
 
-  color: #666;
+  color: var(--secondary);
 }
 
 .pm25 {
@@ -754,7 +830,7 @@ body {
 
 .unit {
 
-  color: #666;
+  color: var(--secondary);
 }
 
 .grid {
@@ -771,21 +847,21 @@ body {
 
 .card {
 
-  background: white;
+  background: var(--card);
 
   border-radius: 14px;
 
   padding: 18px;
 
   box-shadow:
-    0 2px 8px rgba(0,0,0,0.08);
+    0 2px 8px rgba(0,0,0,0.12);
 }
 
 .card-title {
 
   font-size: 14px;
 
-  color: #666;
+  color: var(--secondary);
 
   margin-bottom: 5px;
 }
@@ -799,7 +875,7 @@ body {
 
 .section {
 
-  background: white;
+  background: var(--card);
 
   border-radius: 16px;
 
@@ -808,7 +884,7 @@ body {
   margin-bottom: 16px;
 
   box-shadow:
-    0 2px 8px rgba(0,0,0,0.08);
+    0 2px 8px rgba(0,0,0,0.12);
 }
 
 .section h2 {
@@ -826,7 +902,8 @@ body {
 
   padding: 8px 0;
 
-  border-bottom: 1px solid #eee;
+  border-bottom:
+    1px solid var(--border);
 }
 
 .row:last-child {
@@ -836,7 +913,7 @@ body {
 
 .label {
 
-  color: #666;
+  color: var(--secondary);
 }
 
 .status {
@@ -847,9 +924,9 @@ body {
 
   border-radius: 20px;
 
-  background: #e6f4ea;
+  background: var(--status-bg);
 
-  color: #137333;
+  color: var(--accent);
 
   font-size: 13px;
 }
@@ -876,6 +953,13 @@ body {
 <div class="container">
 
   <div class="header">
+
+    <button
+      class="theme-button"
+      onclick="toggleTheme()"
+      id="themeButton">
+      🌙
+    </button>
 
     <h1>🏠 Air Quality Monitor</h1>
 
@@ -1055,12 +1139,94 @@ body {
 
 <script>
 
+// ============================================================
+// Dark Mode
+// ============================================================
+
+function applyTheme(theme) {
+
+  document.documentElement
+    .setAttribute(
+      'data-theme',
+      theme
+    );
+
+  const button =
+    document.getElementById(
+      'themeButton'
+    );
+
+  if (theme === 'dark') {
+
+    button.textContent = '☀️';
+
+  } else {
+
+    button.textContent = '🌙';
+  }
+
+  localStorage.setItem(
+    'theme',
+    theme
+  );
+}
+
+function toggleTheme() {
+
+  const current =
+    document.documentElement
+      .getAttribute(
+        'data-theme'
+      );
+
+  applyTheme(
+    current === 'dark'
+      ? 'light'
+      : 'dark'
+  );
+}
+
+// Load saved theme
+
+const savedTheme =
+  localStorage.getItem(
+    'theme'
+  );
+
+if (savedTheme) {
+
+  applyTheme(
+    savedTheme
+  );
+
+} else {
+
+  // Follow browser preference
+
+  const prefersDark =
+    window.matchMedia(
+      '(prefers-color-scheme: dark)'
+    ).matches;
+
+  applyTheme(
+    prefersDark
+      ? 'dark'
+      : 'light'
+  );
+}
+
+// ============================================================
+// Live Data
+// ============================================================
+
 async function updateData() {
 
   try {
 
     const response =
-      await fetch('/api/status');
+      await fetch(
+        '/api/status'
+      );
 
     const data =
       await response.json();
@@ -1129,8 +1295,8 @@ async function updateData() {
     document.getElementById('sensorStatus')
       .textContent =
       data.sps30_online
-      ? 'Online'
-      : 'Offline';
+        ? 'Online'
+        : 'Offline';
 
   }
 
@@ -1140,14 +1306,15 @@ async function updateData() {
       'Update failed:',
       error
     );
-
   }
 }
 
 // Initial update
+
 updateData();
 
 // Update every 2 seconds
+
 setInterval(
   updateData,
   2000
@@ -1208,8 +1375,8 @@ void handleApiStatus() {
 
   json += ",\"sps30_online\":";
   json += sps30Online
-          ? "true"
-          : "false";
+    ? "true"
+    : "false";
 
   json += ",\"firmware\":\"";
   json += String(fwMajor);
@@ -1222,9 +1389,15 @@ void handleApiStatus() {
 
   json += ",\"wifi\":\"";
 
-  if (WiFi.status() == WL_CONNECTED) {
+  if (
+    WiFi.status() ==
+    WL_CONNECTED
+  ) {
+
     json += "Connected";
+
   } else {
+
     json += "Disconnected";
   }
 
@@ -1261,14 +1434,19 @@ void handleNotFound() {
 }
 
 // ============================================================
-// Current date/time
+// Current Date / Time
 // ============================================================
 
 String getCurrentTime() {
 
   struct tm timeinfo;
 
-  if (!getLocalTime(&timeinfo)) {
+  if (
+    !getLocalTime(
+      &timeinfo
+    )
+  ) {
+
     return "Time not synchronized";
   }
 
@@ -1338,7 +1516,7 @@ String getUptime() {
 }
 
 // ============================================================
-// OLED DISPLAY CONTROLLER
+// OLED DISPLAY
 // ============================================================
 
 void updateDisplay() {
@@ -1373,7 +1551,9 @@ void drawAirQualityScreen() {
 
   display.setCursor(0, 0);
 
-  display.println("AIR QUALITY");
+  display.println(
+    "AIR QUALITY"
+  );
 
   display.drawLine(
     0,
@@ -1387,7 +1567,9 @@ void drawAirQualityScreen() {
 
   display.setCursor(0, 16);
 
-  display.print("PM2.5 ");
+  display.print(
+    "PM2.5 "
+  );
 
   display.print(
     pm2p5,
@@ -1398,7 +1580,9 @@ void drawAirQualityScreen() {
 
   display.setCursor(0, 40);
 
-  display.print("PM1.0 : ");
+  display.print(
+    "PM1.0 : "
+  );
 
   display.print(
     pm1p0,
@@ -1411,7 +1595,9 @@ void drawAirQualityScreen() {
 
   display.setCursor(0, 52);
 
-  display.print("PM10  : ");
+  display.print(
+    "PM10  : "
+  );
 
   display.print(
     pm10p0,
@@ -1437,7 +1623,11 @@ void drawClockScreen() {
 
   display.setCursor(0, 0);
 
-  if (getLocalTime(&timeinfo)) {
+  if (
+    getLocalTime(
+      &timeinfo
+    )
+  ) {
 
     char dateBuffer[20];
 
@@ -1492,7 +1682,9 @@ void drawClockScreen() {
 
   display.setCursor(0, 21);
 
-  display.print("PM2.5 ");
+  display.print(
+    "PM2.5 "
+  );
 
   display.print(
     pm2p5,
@@ -1505,7 +1697,9 @@ void drawClockScreen() {
 
   display.setCursor(0, 32);
 
-  display.print("PM1.0 ");
+  display.print(
+    "PM1.0 "
+  );
 
   display.print(
     pm1p0,
@@ -1518,7 +1712,9 @@ void drawClockScreen() {
 
   display.setCursor(0, 43);
 
-  display.print("PM10  ");
+  display.print(
+    "PM10  "
+  );
 
   display.print(
     pm10p0,
@@ -1531,7 +1727,9 @@ void drawClockScreen() {
 
   display.setCursor(0, 54);
 
-  display.print("Size  ");
+  display.print(
+    "Size  "
+  );
 
   display.print(
     typicalSize,
@@ -1569,7 +1767,9 @@ void drawParticleScreen() {
 
   display.setCursor(0, 16);
 
-  display.print("NC0.5 : ");
+  display.print(
+    "NC0.5 : "
+  );
 
   display.println(
     nc0p5,
@@ -1578,7 +1778,9 @@ void drawParticleScreen() {
 
   display.setCursor(0, 28);
 
-  display.print("NC1.0 : ");
+  display.print(
+    "NC1.0 : "
+  );
 
   display.println(
     nc1p0,
@@ -1587,7 +1789,9 @@ void drawParticleScreen() {
 
   display.setCursor(0, 40);
 
-  display.print("NC2.5 : ");
+  display.print(
+    "NC2.5 : "
+  );
 
   display.println(
     nc2p5,
@@ -1596,7 +1800,9 @@ void drawParticleScreen() {
 
   display.setCursor(0, 52);
 
-  display.print("NC10  : ");
+  display.print(
+    "NC10  : "
+  );
 
   display.println(
     nc10p0,
@@ -1605,16 +1811,23 @@ void drawParticleScreen() {
 }
 
 // ============================================================
-// System status
+// SYSTEM STATUS
 // ============================================================
 
 void printSystemStatus() {
 
   Serial.println();
-  Serial.println("SYSTEM STATUS");
-  Serial.println("-------------");
+  Serial.println(
+    "SYSTEM STATUS"
+  );
 
-  Serial.print("Wi-Fi: ");
+  Serial.println(
+    "-------------"
+  );
+
+  Serial.print(
+    "Wi-Fi: "
+  );
 
   if (
     WiFi.status() ==
@@ -1653,13 +1866,25 @@ void printSystemStatus() {
   }
 
   Serial.print(
+    "mDNS: http://"
+  );
+
+  Serial.print(
+    MDNS_HOSTNAME
+  );
+
+  Serial.println(
+    ".local"
+  );
+
+  Serial.print(
     "SPS30: "
   );
 
   Serial.println(
     sps30Online
-    ? "Online"
-    : "Offline"
+      ? "Online"
+      : "Offline"
   );
 
   Serial.print(
@@ -1677,28 +1902,5 @@ void printSystemStatus() {
   Serial.println(
     fwMinor
   );
-
-  Serial.print(
-    "Dashboard: http://"
-  );
-
-  Serial.print(
-    WiFi.localIP()
-  );
-
-  Serial.println(
-    "/"
-  );
-
-  Serial.print(
-    "API: http://"
-  );
-
-  Serial.print(
-    WiFi.localIP()
-  );
-
-  Serial.println(
-    "/api/status"
-  );
 }
+
