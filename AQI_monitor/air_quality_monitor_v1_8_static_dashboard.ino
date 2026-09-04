@@ -365,6 +365,8 @@ uint16_t noxLearningMinutesRemaining();
 void updateDisplay();
 void drawDashboardFrame();
 void drawDashboardClock(bool force);
+void drawOverallStatus();
+void drawSystemFooter();
 
 enum DisplayLevel : uint8_t {
   DISPLAY_NEUTRAL = 0,
@@ -377,6 +379,9 @@ DisplayLevel classifyPM(float value, float alertThreshold);
 DisplayLevel classifyCO2();
 DisplayLevel classifyVOC();
 DisplayLevel classifyNOx();
+DisplayLevel overallDisplayLevel();
+
+const char* overallStatusText(DisplayLevel level);
 
 uint16_t displayLevelColor(DisplayLevel level);
 uint16_t displayLevelTextColor(DisplayLevel level);
@@ -2083,9 +2088,11 @@ String historyLabel(int index) {
 //
 // Layout:
 //   Header: AIR QUALITY + HH:MM
+//   Full-width room status banner
 //   Primary: PM2.5 | CO2
 //   Secondary: PM1 | PM4 | PM10 | VOC | NOx
-//   Bottom: Temperature | Humidity
+//   Environment: Temperature | Humidity
+//   Footer: hostname | Wi-Fi RSSI | update age
 //
 // Status colors are presentation-only. Existing alerts, API,
 // history, Telegram and sensor evaluation are not changed.
@@ -2215,6 +2222,112 @@ DisplayLevel classifyNOx() {
   return DISPLAY_GOOD;
 }
 
+// Overall room status is display-only.
+//
+// A missing sensor is reported as SENSOR CHECK rather than
+// incorrectly calling the room air "poor". During sensor warm-up
+// the banner reports STARTING.
+//
+// Once all sensors are producing values, the banner simply takes
+// the worst visible classification among PM2.5, PM10, CO2, VOC
+// and NOx. This does not alter any alert state.
+DisplayLevel overallDisplayLevel() {
+  if (
+    !sps30Online ||
+    !scd4xOnline ||
+    !sht45Online ||
+    !sgp41Online
+  ) {
+    return DISPLAY_BAD;
+  }
+
+  if (
+    lastMeasurementMillis == 0 ||
+    !scd4xHasReading ||
+    !sht45HasReading ||
+    !sgp41HasReading
+  ) {
+    return DISPLAY_WARNING;
+  }
+
+  DisplayLevel level =
+    DISPLAY_GOOD;
+
+  DisplayLevel candidate =
+    classifyPM(
+      pm2p5,
+      pm25AlertThreshold
+    );
+
+  if (candidate > level) {
+    level = candidate;
+  }
+
+  candidate =
+    classifyPM(
+      pm10p0,
+      pm10AlertThreshold
+    );
+
+  if (candidate > level) {
+    level = candidate;
+  }
+
+  candidate = classifyCO2();
+
+  if (candidate > level) {
+    level = candidate;
+  }
+
+  candidate = classifyVOC();
+
+  if (candidate > level) {
+    level = candidate;
+  }
+
+  candidate = classifyNOx();
+
+  if (candidate > level) {
+    level = candidate;
+  }
+
+  return level;
+}
+
+const char* overallStatusText(
+  DisplayLevel level
+) {
+  if (
+    !sps30Online ||
+    !scd4xOnline ||
+    !sht45Online ||
+    !sgp41Online
+  ) {
+    return "AIR QUALITY: SENSOR CHECK";
+  }
+
+  if (
+    lastMeasurementMillis == 0 ||
+    !scd4xHasReading ||
+    !sht45HasReading ||
+    !sgp41HasReading
+  ) {
+    return "AIR QUALITY: STARTING";
+  }
+
+  switch (level) {
+    case DISPLAY_BAD:
+      return "AIR QUALITY: POOR";
+
+    case DISPLAY_WARNING:
+      return "AIR QUALITY: ELEVATED";
+
+    case DISPLAY_GOOD:
+    default:
+      return "AIR QUALITY: GOOD";
+  }
+}
+
 void drawCenteredText(
   const char* text,
   int16_t x,
@@ -2283,7 +2396,7 @@ void drawDashboardTile(
     y,
     w,
     h,
-    6,
+    5,
     background
   );
 
@@ -2292,14 +2405,14 @@ void drawDashboardTile(
     y,
     w,
     h,
-    6,
+    5,
     ILI9341_BLACK
   );
 
   drawCenteredText(
     label,
     x,
-    y + 5,
+    y + 4,
     w,
     primary ? 2 : 1,
     foreground
@@ -2315,8 +2428,8 @@ void drawDashboardTile(
   if (primary) {
     valueSize =
       valueLength <= 4
-        ? 4
-        : 3;
+        ? 3
+        : 2;
   } else {
     valueSize =
       valueLength <= 4
@@ -2327,7 +2440,7 @@ void drawDashboardTile(
   drawCenteredText(
     value,
     x,
-    primary ? y + 29 : y + 23,
+    primary ? y + 23 : y + 16,
     w,
     valueSize,
     foreground
@@ -2340,7 +2453,7 @@ void drawDashboardTile(
     drawCenteredText(
       unit,
       x,
-      y + h - 12,
+      y + h - 10,
       w,
       1,
       foreground
@@ -2355,33 +2468,19 @@ void drawDashboardFrame() {
     0,
     0,
     320,
-    30,
+    26,
     ILI9341_NAVY
   );
 
   tft.setTextColor(ILI9341_WHITE);
   tft.setTextSize(2);
-  tft.setCursor(8, 8);
+  tft.setCursor(7, 6);
   tft.print("AIR QUALITY");
 
   tft.setTextSize(1);
-  tft.setCursor(156, 11);
+  tft.setCursor(154, 9);
   tft.setTextColor(ILI9341_LIGHTGREY);
   tft.print("V1.8");
-
-  tft.drawFastHLine(
-    0,
-    108,
-    320,
-    ILI9341_DARKGREY
-  );
-
-  tft.drawFastHLine(
-    0,
-    168,
-    320,
-    ILI9341_DARKGREY
-  );
 
   lastDisplayedMinute = -2;
   drawDashboardClock(true);
@@ -2401,13 +2500,13 @@ void drawDashboardClock(
         252,
         0,
         68,
-        30,
+        26,
         ILI9341_NAVY
       );
 
       tft.setTextColor(ILI9341_YELLOW);
       tft.setTextSize(2);
-      tft.setCursor(260, 8);
+      tft.setCursor(260, 6);
       tft.print("--:--");
 
       lastDisplayedMinute = -1;
@@ -2438,16 +2537,108 @@ void drawDashboardClock(
     252,
     0,
     68,
-    30,
+    26,
     ILI9341_NAVY
   );
 
   tft.setTextColor(ILI9341_WHITE);
   tft.setTextSize(2);
-  tft.setCursor(258, 8);
+  tft.setCursor(258, 6);
   tft.print(clockText);
 
   lastDisplayedMinute = t.tm_min;
+}
+
+void drawOverallStatus() {
+  DisplayLevel level =
+    overallDisplayLevel();
+
+  uint16_t background =
+    displayLevelColor(level);
+
+  uint16_t foreground =
+    displayLevelTextColor(level);
+
+  tft.fillRect(
+    0,
+    28,
+    320,
+    22,
+    background
+  );
+
+  drawCenteredText(
+    overallStatusText(level),
+    0,
+    32,
+    320,
+    2,
+    foreground
+  );
+}
+
+void drawSystemFooter() {
+  tft.fillRect(
+    0,
+    212,
+    320,
+    28,
+    ILI9341_BLACK
+  );
+
+  tft.setTextSize(1);
+
+  tft.setTextColor(ILI9341_LIGHTGREY);
+  tft.setCursor(4, 221);
+  tft.print("airmonitor.local");
+
+  tft.setCursor(114, 221);
+
+  if (WiFi.status() == WL_CONNECTED) {
+    long rssi =
+      WiFi.RSSI();
+
+    tft.setTextColor(
+      rssi >= -67
+        ? ILI9341_GREEN
+        : (
+            rssi >= -75
+              ? ILI9341_YELLOW
+              : ILI9341_RED
+          )
+    );
+
+    tft.print("WiFi ");
+    tft.print(rssi);
+    tft.print("dBm");
+  } else {
+    tft.setTextColor(ILI9341_RED);
+    tft.print("WiFi OFF");
+  }
+
+  tft.setCursor(232, 221);
+
+  if (lastMeasurementMillis == 0) {
+    tft.setTextColor(ILI9341_YELLOW);
+    tft.print("Updated --");
+  } else {
+    unsigned long ageSeconds =
+      (millis() - lastMeasurementMillis) / 1000UL;
+
+    tft.setTextColor(
+      ageSeconds <= 10
+        ? ILI9341_GREEN
+        : (
+            ageSeconds <= 30
+              ? ILI9341_YELLOW
+              : ILI9341_RED
+          )
+    );
+
+    tft.print("Updated ");
+    tft.print(ageSeconds);
+    tft.print("s");
+  }
 }
 
 void updateDisplay() {
@@ -2463,6 +2654,8 @@ void updateDisplay() {
 
   char tempText[12];
   char humidityText[12];
+
+  drawOverallStatus();
 
   if (lastMeasurementMillis > 0) {
     snprintf(
@@ -2501,7 +2694,7 @@ void updateDisplay() {
   }
 
   drawDashboardTile(
-    4, 34, 154, 70,
+    4, 54, 154, 61,
     "PM2.5",
     pm25Text,
     "ug/m3",
@@ -2515,7 +2708,7 @@ void updateDisplay() {
   );
 
   drawDashboardTile(
-    162, 34, 154, 70,
+    162, 54, 154, 61,
     "CO2",
     co2Text,
     scd4xHasReading
@@ -2612,10 +2805,8 @@ void updateDisplay() {
     );
   }
 
-  // PM1 and PM4 inherit PM2.5 visual status. The existing firmware has no
-  // independent PM1/PM4 alert thresholds.
   drawDashboardTile(
-    4, 112, 60, 52,
+    4, 118, 60, 44,
     "PM1",
     pm1Text,
     "ug/m3",
@@ -2624,7 +2815,7 @@ void updateDisplay() {
   );
 
   drawDashboardTile(
-    67, 112, 60, 52,
+    67, 118, 60, 44,
     "PM4",
     pm4Text,
     "ug/m3",
@@ -2633,7 +2824,7 @@ void updateDisplay() {
   );
 
   drawDashboardTile(
-    130, 112, 60, 52,
+    130, 118, 60, 44,
     "PM10",
     pm10Text,
     "ug/m3",
@@ -2642,7 +2833,7 @@ void updateDisplay() {
   );
 
   drawDashboardTile(
-    193, 112, 60, 52,
+    193, 118, 60, 44,
     "VOC",
     vocText,
     sgp41HasReading
@@ -2653,7 +2844,7 @@ void updateDisplay() {
   );
 
   drawDashboardTile(
-    256, 112, 60, 52,
+    256, 118, 60, 44,
     "NOx",
     noxText,
     sgp41HasReading
@@ -2678,17 +2869,8 @@ void updateDisplay() {
       shtHumidity
     );
   } else {
-    snprintf(
-      tempText,
-      sizeof(tempText),
-      "--"
-    );
-
-    snprintf(
-      humidityText,
-      sizeof(humidityText),
-      "--"
-    );
+    snprintf(tempText, sizeof(tempText), "--");
+    snprintf(humidityText, sizeof(humidityText), "--");
   }
 
   DisplayLevel envLevel =
@@ -2700,7 +2882,7 @@ void updateDisplay() {
       : DISPLAY_BAD;
 
   drawDashboardTile(
-    4, 172, 154, 52,
+    4, 165, 154, 44,
     "TEMPERATURE",
     tempText,
     sht45HasReading
@@ -2711,7 +2893,7 @@ void updateDisplay() {
   );
 
   drawDashboardTile(
-    162, 172, 154, 52,
+    162, 165, 154, 44,
     "HUMIDITY",
     humidityText,
     sht45HasReading
@@ -2721,80 +2903,7 @@ void updateDisplay() {
     false
   );
 
-  tft.fillRect(
-    0,
-    227,
-    320,
-    13,
-    ILI9341_BLACK
-  );
-
-  tft.setTextSize(1);
-
-  tft.setCursor(5, 229);
-  tft.setTextColor(
-    sps30Online
-      ? ILI9341_GREEN
-      : ILI9341_RED
-  );
-  tft.print(
-    sps30Online
-      ? "SPS30 OK"
-      : "SPS30 OFF"
-  );
-
-  tft.setCursor(86, 229);
-  tft.setTextColor(
-    scd4xOnline
-      ? (
-          scd4xHasReading
-            ? ILI9341_GREEN
-            : ILI9341_YELLOW
-        )
-      : ILI9341_RED
-  );
-  tft.print(
-    !scd4xOnline
-      ? "CO2 OFF"
-      : (
-          scd4xHasReading
-            ? "CO2 OK"
-            : "CO2 WARM"
-        )
-  );
-
-  tft.setCursor(160, 229);
-  tft.setTextColor(
-    sht45Online
-      ? ILI9341_GREEN
-      : ILI9341_RED
-  );
-  tft.print(
-    sht45Online
-      ? "ENV OK"
-      : "ENV OFF"
-  );
-
-  tft.setCursor(232, 229);
-  tft.setTextColor(
-    sgp41Online
-      ? (
-          sgp41HasReading
-            ? ILI9341_GREEN
-            : ILI9341_YELLOW
-        )
-      : ILI9341_RED
-  );
-  tft.print(
-    !sgp41Online
-      ? "GAS OFF"
-      : (
-          sgp41HasReading
-            ? "GAS OK"
-            : "GAS WARM"
-        )
-  );
-
+  drawSystemFooter();
   drawDashboardClock(false);
 }
 
