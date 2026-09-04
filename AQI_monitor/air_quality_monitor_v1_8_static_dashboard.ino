@@ -215,8 +215,10 @@ unsigned long lastDisplayRefresh = 0;
 #define HISTORY_INTERVAL 30000UL
 #define DISPLAY_REFRESH_INTERVAL 2000UL
 
-// -2 = never drawn, -1 = time unavailable, 0..59 = displayed minute.
+// Header redraw state.
+// -2 = never drawn, -1 = time unavailable.
 int lastDisplayedMinute = -2;
+int lastDisplayedDay = -2;
 
 // ------------------------------------------------------------
 // HISTORY
@@ -364,7 +366,7 @@ uint16_t noxLearningMinutesRemaining();
 
 void updateDisplay();
 void drawDashboardFrame();
-void drawDashboardClock(bool force);
+void drawDashboardDateTime(bool force);
 void drawOverallStatus();
 void drawSystemFooter();
 
@@ -397,6 +399,21 @@ void drawDashboardTile(
   DisplayLevel level,
   bool primary
 );
+
+void drawEnvironmentTile(
+  int16_t x,
+  int16_t y,
+  int16_t w,
+  int16_t h,
+  const char* label,
+  const char* value,
+  const char* unit,
+  uint8_t iconType,
+  DisplayLevel level
+);
+
+void drawThermometerIcon(int16_t x, int16_t y);
+void drawHumidityIcon(int16_t x, int16_t y);
 
 void drawCenteredText(
   const char* text,
@@ -765,8 +782,8 @@ void loop() {
   }
 
   // Static TFT dashboard.
-  // Sensor values refresh every 2 seconds; the clock region itself
-  // redraws only when the displayed minute changes.
+  // Sensor values refresh every 2 seconds; the date/time header itself
+  // redraws only when its minute or day changes.
   if (
     millis() - lastDisplayRefresh >= DISPLAY_REFRESH_INTERVAL
   ) {
@@ -2082,17 +2099,20 @@ String historyLabel(int index) {
 }
 
 // ============================================================
-// TFT DASHBOARD - V1.8
+// TFT DASHBOARD - V1.8 FINAL BREADBOARD FIRMWARE
 //
 // One fixed 320x240 screen. There is no carousel.
 //
 // Layout:
-//   Header: AIR QUALITY + HH:MM
+//   Header: Fri 04 Sep                         22:46
 //   Full-width room status banner
 //   Primary: PM2.5 | CO2
 //   Secondary: PM1 | PM4 | PM10 | VOC | NOx
-//   Environment: Temperature | Humidity
+//   Environment: temperature | humidity | typical particle size
 //   Footer: hostname | Wi-Fi RSSI | update age
+//
+// SHT45 remains the authoritative room temperature/humidity source.
+// SCD4X environmental readings stay diagnostic only.
 //
 // Status colors are presentation-only. Existing alerts, API,
 // history, Telegram and sensor evaluation are not changed.
@@ -2126,11 +2146,6 @@ uint16_t displayLevelTextColor(
       : ILI9341_WHITE;
 }
 
-// PM alert behavior is NOT changed.
-//
-// Red means the existing configured alert threshold is crossed.
-// Yellow is only a visual "approaching threshold" state and does
-// not trigger Telegram or alter PM alert state.
 DisplayLevel classifyPM(
   float value,
   float alertThreshold
@@ -2146,14 +2161,6 @@ DisplayLevel classifyPM(
   return DISPLAY_GOOD;
 }
 
-// Previous CO2 display already used:
-//   <800 green
-//   800-999 yellow
-//   1000-1499 orange
-//   >=1500 red
-//
-// V1.8 collapses yellow + orange into the requested yellow band.
-// This changes only TFT presentation.
 DisplayLevel classifyCO2() {
   if (!scd4xOnline) {
     return DISPLAY_BAD;
@@ -2174,10 +2181,6 @@ DisplayLevel classifyCO2() {
   return DISPLAY_GOOD;
 }
 
-// Reuse the existing VOC interpretation:
-//   <=100 baseline
-//   101-250 mild/elevated
-//   >250 high/very high
 DisplayLevel classifyVOC() {
   if (!sgp41Online) {
     return DISPLAY_BAD;
@@ -2198,10 +2201,6 @@ DisplayLevel classifyVOC() {
   return DISPLAY_GOOD;
 }
 
-// Reuse the existing NOx interpretation:
-//   <=1 baseline
-//   2-150 minor/elevated
-//   >150 high/very high
 DisplayLevel classifyNOx() {
   if (!sgp41Online) {
     return DISPLAY_BAD;
@@ -2222,15 +2221,6 @@ DisplayLevel classifyNOx() {
   return DISPLAY_GOOD;
 }
 
-// Overall room status is display-only.
-//
-// A missing sensor is reported as SENSOR CHECK rather than
-// incorrectly calling the room air "poor". During sensor warm-up
-// the banner reports STARTING.
-//
-// Once all sensors are producing values, the banner simply takes
-// the worst visible classification among PM2.5, PM10, CO2, VOC
-// and NOx. This does not alter any alert state.
 DisplayLevel overallDisplayLevel() {
   if (
     !sps30Online ||
@@ -2461,6 +2451,158 @@ void drawDashboardTile(
   }
 }
 
+void drawThermometerIcon(
+  int16_t x,
+  int16_t y
+) {
+  tft.drawRoundRect(
+    x + 3,
+    y,
+    6,
+    13,
+    3,
+    ILI9341_ORANGE
+  );
+
+  tft.fillRect(
+    x + 5,
+    y + 4,
+    2,
+    10,
+    ILI9341_ORANGE
+  );
+
+  tft.fillCircle(
+    x + 6,
+    y + 14,
+    5,
+    ILI9341_ORANGE
+  );
+}
+
+void drawHumidityIcon(
+  int16_t x,
+  int16_t y
+) {
+  tft.fillTriangle(
+    x + 6,
+    y,
+    x + 1,
+    y + 10,
+    x + 11,
+    y + 10,
+    ILI9341_CYAN
+  );
+
+  tft.fillCircle(
+    x + 6,
+    y + 10,
+    5,
+    ILI9341_CYAN
+  );
+}
+
+void drawEnvironmentTile(
+  int16_t x,
+  int16_t y,
+  int16_t w,
+  int16_t h,
+  const char* label,
+  const char* value,
+  const char* unit,
+  uint8_t iconType,
+  DisplayLevel level
+) {
+  uint16_t background =
+    displayLevelColor(level);
+
+  uint16_t foreground =
+    displayLevelTextColor(level);
+
+  tft.fillRoundRect(
+    x,
+    y,
+    w,
+    h,
+    5,
+    background
+  );
+
+  tft.drawRoundRect(
+    x,
+    y,
+    w,
+    h,
+    5,
+    ILI9341_BLACK
+  );
+
+  drawCenteredText(
+    label,
+    x,
+    y + 4,
+    w,
+    1,
+    foreground
+  );
+
+  if (iconType == 1) {
+    drawThermometerIcon(
+      x + 8,
+      y + 19
+    );
+  } else if (iconType == 2) {
+    drawHumidityIcon(
+      x + 8,
+      y + 20
+    );
+  }
+
+  int16_t valueX =
+    iconType == 0
+      ? x
+      : x + 21;
+
+  int16_t valueW =
+    iconType == 0
+      ? w
+      : w - 23;
+
+  size_t valueLength =
+    value
+      ? strlen(value)
+      : 0;
+
+  uint8_t valueSize =
+    valueLength <= 4
+      ? 2
+      : 1;
+
+  drawCenteredText(
+    value,
+    valueX,
+    y + 20,
+    valueW,
+    valueSize,
+    foreground
+  );
+
+  if (
+    unit &&
+    unit[0] != '\0'
+  ) {
+    tft.setTextSize(1);
+    tft.setTextColor(foreground);
+
+    tft.setCursor(
+      x + w - 17,
+      y + 28
+    );
+
+    tft.print(unit);
+  }
+}
+
 void drawDashboardFrame() {
   tft.fillScreen(ILI9341_BLACK);
 
@@ -2472,21 +2614,13 @@ void drawDashboardFrame() {
     ILI9341_NAVY
   );
 
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(7, 6);
-  tft.print("AIR QUALITY");
-
-  tft.setTextSize(1);
-  tft.setCursor(154, 9);
-  tft.setTextColor(ILI9341_LIGHTGREY);
-  tft.print("V1.8");
-
   lastDisplayedMinute = -2;
-  drawDashboardClock(true);
+  lastDisplayedDay = -2;
+
+  drawDashboardDateTime(true);
 }
 
-void drawDashboardClock(
+void drawDashboardDateTime(
   bool force
 ) {
   struct tm t;
@@ -2494,22 +2628,28 @@ void drawDashboardClock(
   if (!getLocalTime(&t, 50)) {
     if (
       force ||
-      lastDisplayedMinute != -1
+      lastDisplayedMinute != -1 ||
+      lastDisplayedDay != -1
     ) {
       tft.fillRect(
-        252,
         0,
-        68,
+        0,
+        320,
         26,
         ILI9341_NAVY
       );
 
       tft.setTextColor(ILI9341_YELLOW);
       tft.setTextSize(2);
-      tft.setCursor(260, 6);
+
+      tft.setCursor(7, 6);
+      tft.print("--- -- ---");
+
+      tft.setCursor(258, 6);
       tft.print("--:--");
 
       lastDisplayedMinute = -1;
+      lastDisplayedDay = -1;
     }
 
     return;
@@ -2519,12 +2659,21 @@ void drawDashboardClock(
 
   if (
     !force &&
-    lastDisplayedMinute == t.tm_min
+    lastDisplayedMinute == t.tm_min &&
+    lastDisplayedDay == t.tm_yday
   ) {
     return;
   }
 
+  char dateText[16];
   char clockText[6];
+
+  strftime(
+    dateText,
+    sizeof(dateText),
+    "%a %d %b",
+    &t
+  );
 
   strftime(
     clockText,
@@ -2534,19 +2683,24 @@ void drawDashboardClock(
   );
 
   tft.fillRect(
-    252,
     0,
-    68,
+    0,
+    320,
     26,
     ILI9341_NAVY
   );
 
   tft.setTextColor(ILI9341_WHITE);
   tft.setTextSize(2);
+
+  tft.setCursor(7, 6);
+  tft.print(dateText);
+
   tft.setCursor(258, 6);
   tft.print(clockText);
 
   lastDisplayedMinute = t.tm_min;
+  lastDisplayedDay = t.tm_yday;
 }
 
 void drawOverallStatus() {
@@ -2654,6 +2808,7 @@ void updateDisplay() {
 
   char tempText[12];
   char humidityText[12];
+  char particleSizeText[12];
 
   drawOverallStatus();
 
@@ -2665,11 +2820,7 @@ void updateDisplay() {
       pm2p5
     );
   } else {
-    snprintf(
-      pm25Text,
-      sizeof(pm25Text),
-      "--"
-    );
+    snprintf(pm25Text, sizeof(pm25Text), "--");
   }
 
   if (scd4xHasReading) {
@@ -2680,17 +2831,9 @@ void updateDisplay() {
       co2ppm
     );
   } else if (scd4xOnline) {
-    snprintf(
-      co2Text,
-      sizeof(co2Text),
-      "WARM"
-    );
+    snprintf(co2Text, sizeof(co2Text), "WARM");
   } else {
-    snprintf(
-      co2Text,
-      sizeof(co2Text),
-      "OFF"
-    );
+    snprintf(co2Text, sizeof(co2Text), "OFF");
   }
 
   drawDashboardTile(
@@ -2699,10 +2842,7 @@ void updateDisplay() {
     pm25Text,
     "ug/m3",
     lastMeasurementMillis > 0
-      ? classifyPM(
-          pm2p5,
-          pm25AlertThreshold
-        )
+      ? classifyPM(pm2p5, pm25AlertThreshold)
       : DISPLAY_WARNING,
     true
   );
@@ -2711,54 +2851,36 @@ void updateDisplay() {
     162, 54, 154, 61,
     "CO2",
     co2Text,
-    scd4xHasReading
-      ? "ppm"
-      : "",
+    scd4xHasReading ? "ppm" : "",
     classifyCO2(),
     true
   );
 
   DisplayLevel pm25Level =
     lastMeasurementMillis > 0
-      ? classifyPM(
-          pm2p5,
-          pm25AlertThreshold
-        )
+      ? classifyPM(pm2p5, pm25AlertThreshold)
       : DISPLAY_WARNING;
 
   DisplayLevel pm10Level =
     lastMeasurementMillis > 0
-      ? classifyPM(
-          pm10p0,
-          pm10AlertThreshold
-        )
+      ? classifyPM(pm10p0, pm10AlertThreshold)
       : DISPLAY_WARNING;
 
   if (lastMeasurementMillis > 0) {
+    snprintf(pm1Text, sizeof(pm1Text), "%.1f", pm1p0);
+    snprintf(pm4Text, sizeof(pm4Text), "%.1f", pm4p0);
+    snprintf(pm10Text, sizeof(pm10Text), "%.1f", pm10p0);
     snprintf(
-      pm1Text,
-      sizeof(pm1Text),
-      "%.1f",
-      pm1p0
-    );
-
-    snprintf(
-      pm4Text,
-      sizeof(pm4Text),
-      "%.1f",
-      pm4p0
-    );
-
-    snprintf(
-      pm10Text,
-      sizeof(pm10Text),
-      "%.1f",
-      pm10p0
+      particleSizeText,
+      sizeof(particleSizeText),
+      "%.2f",
+      typicalSize
     );
   } else {
     snprintf(pm1Text, sizeof(pm1Text), "--");
     snprintf(pm4Text, sizeof(pm4Text), "--");
     snprintf(pm10Text, sizeof(pm10Text), "--");
+    snprintf(particleSizeText, sizeof(particleSizeText), "--");
   }
 
   if (sgp41HasReading) {
@@ -2766,43 +2888,21 @@ void updateDisplay() {
       vocText,
       sizeof(vocText),
       "%ld",
-      static_cast<long>(
-        vocIndex
-      )
+      static_cast<long>(vocIndex)
     );
 
     snprintf(
       noxText,
       sizeof(noxText),
       "%ld",
-      static_cast<long>(
-        noxIndex
-      )
+      static_cast<long>(noxIndex)
     );
   } else if (sgp41Online) {
-    snprintf(
-      vocText,
-      sizeof(vocText),
-      "WARM"
-    );
-
-    snprintf(
-      noxText,
-      sizeof(noxText),
-      "WARM"
-    );
+    snprintf(vocText, sizeof(vocText), "WARM");
+    snprintf(noxText, sizeof(noxText), "WARM");
   } else {
-    snprintf(
-      vocText,
-      sizeof(vocText),
-      "OFF"
-    );
-
-    snprintf(
-      noxText,
-      sizeof(noxText),
-      "OFF"
-    );
+    snprintf(vocText, sizeof(vocText), "OFF");
+    snprintf(noxText, sizeof(noxText), "OFF");
   }
 
   drawDashboardTile(
@@ -2836,9 +2936,7 @@ void updateDisplay() {
     193, 118, 60, 44,
     "VOC",
     vocText,
-    sgp41HasReading
-      ? "index"
-      : "",
+    sgp41HasReading ? "index" : "",
     classifyVOC(),
     false
   );
@@ -2847,9 +2945,7 @@ void updateDisplay() {
     256, 118, 60, 44,
     "NOx",
     noxText,
-    sgp41HasReading
-      ? "index"
-      : "",
+    sgp41HasReading ? "index" : "",
     classifyNOx(),
     false
   );
@@ -2881,30 +2977,44 @@ void updateDisplay() {
       ? DISPLAY_NEUTRAL
       : DISPLAY_BAD;
 
-  drawDashboardTile(
-    4, 165, 154, 44,
-    "TEMPERATURE",
+  DisplayLevel particleSizeLevel =
+    (
+      sps30Online &&
+      lastMeasurementMillis > 0
+    )
+      ? DISPLAY_NEUTRAL
+      : DISPLAY_BAD;
+
+  // iconType: 1=thermometer, 2=droplet, 0=no icon.
+  drawEnvironmentTile(
+    4, 165, 102, 44,
+    "TEMP",
     tempText,
-    sht45HasReading
-      ? "C"
-      : "",
-    envLevel,
-    false
+    sht45HasReading ? "C" : "",
+    1,
+    envLevel
   );
 
-  drawDashboardTile(
-    162, 165, 154, 44,
+  drawEnvironmentTile(
+    109, 165, 102, 44,
     "HUMIDITY",
     humidityText,
-    sht45HasReading
-      ? "%"
-      : "",
-    envLevel,
-    false
+    sht45HasReading ? "%" : "",
+    2,
+    envLevel
+  );
+
+  drawEnvironmentTile(
+    214, 165, 102, 44,
+    "TPS",
+    particleSizeText,
+    lastMeasurementMillis > 0 ? "um" : "",
+    0,
+    particleSizeLevel
   );
 
   drawSystemFooter();
-  drawDashboardClock(false);
+  drawDashboardDateTime(false);
 }
 
 void showFatalError(
